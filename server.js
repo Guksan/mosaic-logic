@@ -104,4 +104,4 @@ app.post('/api/payments/webhook', express.raw({ type: 'application/json' }), asy
 
 // Spuštění serveru
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Server běží na https://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`Server běží na https://localhost:${PORTs}`));
