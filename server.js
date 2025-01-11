@@ -47,9 +47,9 @@ app.post('/api/orders/create', upload.array('photos'), async (req, res) => {
 
     // Vytvořte Stripe Checkout Session
     let priceId;
-    if (package === 'Základní balíček') priceId = 'price_12345';
-    if (package === 'Pokročilý balíček') priceId = 'price_67890';
-    if (package === 'Prémiový balíček') priceId = 'price_abcdef';
+    if (package === 'Základní balíček') priceId = 'price_1QgD6zKOjxPRwLQE6sc5mzB0';
+    if (package === 'Pokročilý balíček') priceId = 'price_1QgD6zKOjxPRwLQE6sc5mzB0';
+    if (package === 'Prémiový balíček') priceId = 'price_1QgD6zKOjxPRwLQE6sc5mzB0';
 
     const session = await stripeClient.checkout.sessions.create({
       payment_method_types: ['card'],
