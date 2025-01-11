@@ -1,8 +1,0 @@
-CREATE TABLE orders (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    email VARCHAR(255) NOT NULL,
-    package VARCHAR(50) NOT NULL,
-    photos TEXT NOT NULL,
-    status VARCHAR(50) DEFAULT 'pending',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
