@@ -1,9 +1,10 @@
 const express = require('express');
-const mongoose = require('mongoose');
 const multer = require('multer');
 const stripe = require('stripe');
 const dotenv = require('dotenv');
 const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
+const sqlite3 = require('sqlite3').verbose();
+const path = require('path');
 
 // Načtení konfigurace
 dotenv.config();
@@ -22,23 +23,34 @@ const s3 = new S3Client({
     },
 });
 
-// Připojení k MongoDB
-mongoose.connect(process.env.MONGO_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-})
-.then(() => console.log('Připojeno k MongoDB'))
-.catch(err => console.error('Chyba při připojení k MongoDB:', err));
-
-// Vytvoření schématu a modelu pro objednávky
-const OrderSchema = new mongoose.Schema({
-    email: String,
-    package: String,
-    files: [String],
-    paymentStatus: { type: String, default: 'Pending' },
-    orderDate: { type: Date, default: Date.now },
+// Inicializace SQLite databáze
+const dbPath = path.resolve(__dirname, 'database.db');
+const db = new sqlite3.Database(dbPath, (err) => {
+    if (err) {
+        console.error('Chyba při připojení k SQLite:', err.message);
+    } else {
+        console.log('Připojeno k SQLite databázi');
+    }
 });
-const Order = mongoose.model('Order', OrderSchema);
+
+// Vytvoření tabulky objednávek
+const createTableQuery = `
+CREATE TABLE IF NOT EXISTS orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT NOT NULL,
+    package TEXT NOT NULL,
+    files TEXT NOT NULL,
+    paymentStatus TEXT DEFAULT 'Pending',
+    orderDate TEXT DEFAULT CURRENT_TIMESTAMP
+);
+`;
+db.run(createTableQuery, (err) => {
+    if (err) {
+        console.error('Chyba při vytváření tabulky:', err.message);
+    } else {
+        console.log('Tabulka objednávek byla vytvořena nebo již existuje');
+    }
+});
 
 // Endpoint pro vytvoření objednávky
 app.post('/api/orders/create', upload.array('photos'), async (req, res) => {
@@ -59,34 +71,42 @@ app.post('/api/orders/create', upload.array('photos'), async (req, res) => {
             photoUrls.push(`https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${params.Key}`);
         }
 
-        // Vytvoření objednávky v databázi
-        const newOrder = new Order({
-            email,
-            package,
-            files: photoUrls,
+        // Uložení objednávky do SQLite databáze
+        const insertQuery = `
+        INSERT INTO orders (email, package, files, paymentStatus)
+        VALUES (?, ?, ?, ?)
+        `;
+        db.run(insertQuery, [email, package, JSON.stringify(photoUrls), 'Awaiting Payment'], function (err) {
+            if (err) {
+                console.error('Chyba při ukládání do SQLite:', err.message);
+                return res.status(500).json({ error: 'Chyba při ukládání objednávky.' });
+            }
+
+            const orderId = this.lastID;
+
+            // Stripe Checkout Session
+            let priceId;
+            if (package === 'Základní balíček') priceId = 'price_1QgD6zKOjxPRwLQE6sc5mzB0';
+            if (package === 'Pokročilý balíček') priceId = 'price_1QgD6zKOjxPRwLQE6sc5mzB0';
+            if (package === 'Prémiový balíček') priceId = 'price_1QgD6zKOjxPRwLQE6sc5mzB0';
+
+            stripeClient.checkout.sessions
+                .create({
+                    payment_method_types: ['card'],
+                    customer_email: email,
+                    line_items: [{ price: priceId, quantity: 1 }],
+                    mode: 'payment',
+                    success_url: `https://your-domain.com/success?orderId=${orderId}`,
+                    cancel_url: 'https://your-domain.com/cancel',
+                })
+                .then((session) => {
+                    res.status(200).json({ url: session.url });
+                })
+                .catch((error) => {
+                    console.error('Chyba při vytváření Stripe session:', error);
+                    res.status(500).json({ error: 'Chyba při vytváření platby.' });
+                });
         });
-        await newOrder.save();
-
-        // Stripe Checkout Session
-        let priceId;
-        if (package === 'Základní balíček') priceId = 'price_1QgD6zKOjxPRwLQE6sc5mzB0';
-        if (package === 'Pokročilý balíček') priceId = 'price_1QgD6zKOjxPRwLQE6sc5mzB0';
-        if (package === 'Prémiový balíček') priceId = 'price_1QgD6zKOjxPRwLQE6sc5mzB0';
-
-        const session = await stripeClient.checkout.sessions.create({
-            payment_method_types: ['card'],
-            customer_email: email,
-            line_items: [{ price: priceId, quantity: 1 }],
-            mode: 'payment',
-            success_url: `https://your-domain.com/success?orderId=${newOrder._id}`,
-            cancel_url: 'https://your-domain.com/cancel',
-        });
-
-        // Aktualizace odkazu na platbu v databázi
-        newOrder.paymentStatus = 'Awaiting Payment';
-        await newOrder.save();
-
-        res.status(200).json({ url: session.url });
     } catch (error) {
         console.error('Chyba:', error);
         res.status(500).json({ error: 'Chyba při zpracování objednávky.' });
@@ -94,13 +114,15 @@ app.post('/api/orders/create', upload.array('photos'), async (req, res) => {
 });
 
 // Endpoint pro seznam objednávek
-app.get('/api/orders', async (req, res) => {
-    try {
-        const orders = await Order.find().sort({ orderDate: -1 });
-        res.json(orders);
-    } catch (error) {
-        res.status(500).send({ error: 'Chyba při získávání objednávek.' });
-    }
+app.get('/api/orders', (req, res) => {
+    const selectQuery = `SELECT * FROM orders ORDER BY orderDate DESC`;
+    db.all(selectQuery, [], (err, rows) => {
+        if (err) {
+            console.error('Chyba při načítání objednávek:', err.message);
+            return res.status(500).json({ error: 'Chyba při načítání objednávek.' });
+        }
+        res.json(rows);
+    });
 });
 
 // Spuštění serveru
