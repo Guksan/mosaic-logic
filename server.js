@@ -28,60 +28,52 @@ app.use(bodyParser.urlencoded({ extended: true }));
 
 // Endpoint pro vytvoření objednávky
 app.post('/api/orders/create', upload.array('photos'), async (req, res) => {
-  console.log('Přijatý požadavek na /api/orders/create');
-  console.log('Tělo požadavku:', req.body);
-  console.log('Nahrané soubory:', req.files);
+  console.log("Přijatý požadavek na /api/orders/create");
+  console.log("Tělo požadavku:", req.body);
 
   const { email, package } = req.body;
-  const files = req.files || [];
+  const files = req.files;
   const photoUrls = [];
-
-  if (!email || !package) {
-    console.error('Chyba: Chybí e-mail nebo balíček.');
-    return res.status(400).json({ error: 'Chybí e-mail nebo balíček.' });
-  }
 
   try {
     // Nahrajte fotografie na S3
-    for (const file of files) {
-      console.log(`Nahrávám soubor: ${file.originalname}`);
-      const params = {
-        Bucket: process.env.AWS_BUCKET_NAME,
-        Key: `${Date.now()}-${file.originalname}`,
-        Body: file.buffer,
-      };
-      const command = new PutObjectCommand(params);
-      await s3.send(command);
-      const photoUrl = `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${params.Key}`;
-      photoUrls.push(photoUrl);
-      console.log(`Soubor nahrán na: ${photoUrl}`);
+    if (files && files.length > 0) {
+      for (const file of files) {
+        console.log(`Nahrávám soubor: ${file.originalname}`);
+        const params = {
+          Bucket: process.env.AWS_BUCKET_NAME,
+          Key: `${Date.now()}-${file.originalname}`,
+          Body: file.buffer,
+        };
+        const command = new PutObjectCommand(params);
+        await s3.send(command);
+        const photoUrl = `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${params.Key}`;
+        photoUrls.push(photoUrl);
+        console.log(`Soubor nahrán na: ${photoUrl}`);
+      }
+    } else {
+      console.error("Žádné soubory nebyly nahrány!");
     }
 
     // Vytvořte Stripe Checkout Session
-    console.log('Vytvářím Stripe session...');
-    let priceId;
-    if (package === 'Základní balíček') priceId = 'price_1QgD6zKOjxPRwLQE6sc5mzB0';
-    if (package === 'Pokročilý balíček') priceId = 'price_1QgD6zKOjxPRwLQE6sc5mzB0';
-    if (package === 'Prémiový balíček') priceId = 'price_1QgD6zKOjxPRwLQE6sc5mzB0';
-
-    if (!priceId) {
-      console.error('Chyba: Neplatný balíček.');
-      return res.status(400).json({ error: 'Neplatný balíček.' });
-    }
+    console.log("Vytvářím Stripe session...");
+    let priceId = 'price_1QgD6zKOjxPRwLQE6sc5mzB0'; // Jeden globální price ID pro všechny balíčky
 
     const session = await stripeClient.checkout.sessions.create({
       payment_method_types: ['card'],
       customer_email: email,
       line_items: [{ price: priceId, quantity: 1 }],
       mode: 'payment',
-      success_url: 'https://your-domain.com/success',
-      cancel_url: 'https://your-domain.com/cancel',
+      success_url: 'https://your-success-page.com',
+      cancel_url: 'https://your-cancel-page.com',
     });
 
-    console.log('Stripe session vytvořena:', session.url);
+    console.log("Stripe session vytvořena:", session.url);
+
+    // Odeslat URL zpět na front-end
     res.status(200).json({ url: session.url });
   } catch (error) {
-    console.error('Chyba při zpracování objednávky:', error);
+    console.error('Chyba:', error);
     res.status(500).json({ error: 'Chyba při zpracování objednávky.' });
   }
 });
@@ -95,7 +87,9 @@ app.post('/api/payments/webhook', express.raw({ type: 'application/json' }), asy
 
     if (event.type === 'checkout.session.completed') {
       const session = event.data.object;
-      console.log(`Platba úspěšná: ${session.customer_email}`);
+
+      // Aktualizace stavu objednávky v databázi
+      console.log(`Platba od ${session.customer_email} úspěšná.`);
     }
 
     res.status(200).send();
