@@ -3,7 +3,7 @@ const multer = require('multer');
 const bodyParser = require('body-parser');
 const stripe = require('stripe');
 const dotenv = require('dotenv');
-const cors = require('cors');
+const cors = require('cors'); // Import CORS middleware
 const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
 
 // Načtení konfigurace
@@ -24,12 +24,15 @@ const s3 = new S3Client({
 });
 
 // Middleware
-app.use(cors({
-  origin: 'https://tomasguryca96-wixstudio-com.filesusr.com',
-  methods: ['GET', 'POST'],
-}));
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
+
+// CORS middleware
+app.use(cors({
+  origin: 'https://tomasguryca96-wixstudio-com.filesusr.com', // Povolit konkrétní doménu
+  methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
+  credentials: true, // Povolit sdílení cookies, pokud je potřeba
+}));
 
 // Endpoint pro vytvoření objednávky
 app.post('/api/orders/create', upload.array('photos'), async (req, res) => {
@@ -41,61 +44,39 @@ app.post('/api/orders/create', upload.array('photos'), async (req, res) => {
   const photoUrls = [];
 
   try {
-    if (!email || !package || !files.length) {
-      console.error('Chybí povinné parametry.');
-      return res.status(400).json({ success: false, message: 'Chybí povinné parametry.' });
-    }
-
-    // Nahrání souborů na S3
+    // Nahrajte fotografie na S3
     for (const file of files) {
-      console.log(`Nahrávám soubor: ${file.originalname}`);
+      console.log('Nahrávám soubor:', file.originalname);
       const params = {
         Bucket: process.env.AWS_BUCKET_NAME,
         Key: `${Date.now()}-${file.originalname}`,
         Body: file.buffer,
       };
       const command = new PutObjectCommand(params);
-      const result = await s3.send(command);
-      console.log(`Soubor nahrán na: https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${params.Key}`);
-      photoUrls.push(`https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${params.Key}`);
+      await s3.send(command);
+      const uploadedUrl = `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${params.Key}`;
+      console.log('Soubor nahrán na:', uploadedUrl);
+      photoUrls.push(uploadedUrl);
     }
 
+    // Vytvořte Stripe Checkout Session
     console.log('Vytvářím Stripe session...');
-    let priceId = 'price_1QgD6zKOjxPRwLQE6sc5mzB0';
+    let priceId = 'price_1QgD6zKOjxPRwLQE6sc5mzB0'; // Defaultní cena
 
     const session = await stripeClient.checkout.sessions.create({
       payment_method_types: ['card'],
       customer_email: email,
       line_items: [{ price: priceId, quantity: 1 }],
       mode: 'payment',
-      success_url: 'https://your-domain.com/success',
-      cancel_url: 'https://your-domain.com/cancel',
+      success_url: 'https://your-frontend.com/success',
+      cancel_url: 'https://your-frontend.com/cancel',
     });
 
     console.log('Stripe session vytvořena:', session.url);
-    res.status(200).json({ success: true, url: session.url });
+    res.status(200).json({ url: session.url });
   } catch (error) {
-    console.error('Chyba při zpracování objednávky:', error);
-    res.status(500).json({ success: false, message: 'Chyba při zpracování objednávky.', error: error.message });
-  }
-});
-
-// Stripe Webhook
-app.post('/api/payments/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
-  const sig = req.headers['stripe-signature'];
-
-  try {
-    const event = stripeClient.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
-
-    if (event.type === 'checkout.session.completed') {
-      const session = event.data.object;
-      console.log(`Platba od ${session.customer_email} úspěšná.`);
-    }
-
-    res.status(200).send();
-  } catch (error) {
-    console.error('Webhook error:', error.message);
-    res.status(400).send(`Webhook Error: ${error.message}`);
+    console.error('Chyba:', error);
+    res.status(500).json({ error: 'Chyba při zpracování objednávky.' });
   }
 });
 
