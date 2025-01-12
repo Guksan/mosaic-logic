@@ -54,6 +54,10 @@ db.run(createTableQuery, (err) => {
 
 // Endpoint pro vytvoření objednávky
 app.post('/api/orders/create', upload.array('photos'), async (req, res) => {
+    console.log('Přijatý požadavek na /api/orders/create');
+    console.log('Tělo požadavku:', req.body);
+    console.log('Přiložené soubory:', req.files);
+
     const { email, package } = req.body;
     const files = req.files;
     const photoUrls = [];
@@ -61,6 +65,7 @@ app.post('/api/orders/create', upload.array('photos'), async (req, res) => {
     try {
         // Nahrajte fotografie na S3
         for (const file of files) {
+            console.log(`Nahrávám soubor: ${file.originalname}`);
             const params = {
                 Bucket: process.env.AWS_BUCKET_NAME,
                 Key: `${Date.now()}-${file.originalname}`,
@@ -68,10 +73,13 @@ app.post('/api/orders/create', upload.array('photos'), async (req, res) => {
             };
             const command = new PutObjectCommand(params);
             await s3.send(command);
-            photoUrls.push(`https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${params.Key}`);
+            const fileUrl = `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${params.Key}`;
+            photoUrls.push(fileUrl);
+            console.log(`Soubor nahrán na: ${fileUrl}`);
         }
 
         // Uložení objednávky do SQLite databáze
+        console.log('Ukládám objednávku do databáze...');
         const insertQuery = `
         INSERT INTO orders (email, package, files, paymentStatus)
         VALUES (?, ?, ?, ?)
@@ -83,6 +91,7 @@ app.post('/api/orders/create', upload.array('photos'), async (req, res) => {
             }
 
             const orderId = this.lastID;
+            console.log(`Objednávka uložena s ID: ${orderId}`);
 
             // Stripe Checkout Session
             let priceId;
@@ -90,6 +99,7 @@ app.post('/api/orders/create', upload.array('photos'), async (req, res) => {
             if (package === 'Pokročilý balíček') priceId = 'price_1QgD6zKOjxPRwLQE6sc5mzB0';
             if (package === 'Prémiový balíček') priceId = 'price_1QgD6zKOjxPRwLQE6sc5mzB0';
 
+            console.log('Vytvářím Stripe Checkout Session...');
             stripeClient.checkout.sessions
                 .create({
                     payment_method_types: ['card'],
@@ -100,6 +110,7 @@ app.post('/api/orders/create', upload.array('photos'), async (req, res) => {
                     cancel_url: 'https://your-domain.com/cancel',
                 })
                 .then((session) => {
+                    console.log('Stripe Checkout Session vytvořena:', session.url);
                     res.status(200).json({ url: session.url });
                 })
                 .catch((error) => {
@@ -115,12 +126,14 @@ app.post('/api/orders/create', upload.array('photos'), async (req, res) => {
 
 // Endpoint pro seznam objednávek
 app.get('/api/orders', (req, res) => {
+    console.log('Přijatý požadavek na /api/orders');
     const selectQuery = `SELECT * FROM orders ORDER BY orderDate DESC`;
     db.all(selectQuery, [], (err, rows) => {
         if (err) {
             console.error('Chyba při načítání objednávek:', err.message);
             return res.status(500).json({ error: 'Chyba při načítání objednávek.' });
         }
+        console.log('Načtené objednávky:', rows);
         res.json(rows);
     });
 });
