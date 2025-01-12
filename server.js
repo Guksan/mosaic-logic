@@ -63,28 +63,13 @@ app.post('/api/orders/create', upload.array('photos'), async (req, res) => {
     const photoUrls = [];
 
     try {
-        // Nahrajte fotografie na S3
-        for (const file of files) {
-            console.log(`Nahrávám soubor: ${file.originalname}`);
-            const params = {
-                Bucket: process.env.AWS_BUCKET_NAME,
-                Key: `${Date.now()}-${file.originalname}`,
-                Body: file.buffer,
-            };
-            const command = new PutObjectCommand(params);
-            await s3.send(command);
-            const fileUrl = `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${params.Key}`;
-            photoUrls.push(fileUrl);
-            console.log(`Soubor nahrán na: ${fileUrl}`);
-        }
-
         // Uložení objednávky do SQLite databáze
         console.log('Ukládám objednávku do databáze...');
         const insertQuery = `
         INSERT INTO orders (email, package, files, paymentStatus)
         VALUES (?, ?, ?, ?)
         `;
-        db.run(insertQuery, [email, package, JSON.stringify(photoUrls), 'Awaiting Payment'], function (err) {
+        db.run(insertQuery, [email, package, JSON.stringify([]), 'Awaiting Payment'], function (err) {
             if (err) {
                 console.error('Chyba při ukládání do SQLite:', err.message);
                 return res.status(500).json({ error: 'Chyba při ukládání objednávky.' });
@@ -93,29 +78,66 @@ app.post('/api/orders/create', upload.array('photos'), async (req, res) => {
             const orderId = this.lastID;
             console.log(`Objednávka uložena s ID: ${orderId}`);
 
-            // Stripe Checkout Session
-            let priceId;
-            if (package === 'Základní balíček') priceId = 'price_1QgD6zKOjxPRwLQE6sc5mzB0';
-            if (package === 'Pokročilý balíček') priceId = 'price_1QgD6zKOjxPRwLQE6sc5mzB0';
-            if (package === 'Prémiový balíček') priceId = 'price_1QgD6zKOjxPRwLQE6sc5mzB0';
+            // Vytvoření složky na S3 podle ID objednávky
+            const folderKey = `orders/${orderId}/`;
 
-            console.log('Vytvářím Stripe Checkout Session...');
-            stripeClient.checkout.sessions
-                .create({
-                    payment_method_types: ['card'],
-                    customer_email: email,
-                    line_items: [{ price: priceId, quantity: 1 }],
-                    mode: 'payment',
-                    success_url: `https://your-domain.com/success?orderId=${orderId}`,
-                    cancel_url: 'https://your-domain.com/cancel',
+            // Nahrajte fotografie na S3
+            Promise.all(
+                files.map(async (file) => {
+                    console.log(`Nahrávám soubor: ${file.originalname}`);
+                    const fileKey = `${folderKey}${Date.now()}-${file.originalname}`;
+                    const params = {
+                        Bucket: process.env.AWS_BUCKET_NAME,
+                        Key: fileKey,
+                        Body: file.buffer,
+                    };
+                    const command = new PutObjectCommand(params);
+                    await s3.send(command);
+                    const fileUrl = `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${fileKey}`;
+                    photoUrls.push(fileUrl);
+                    console.log(`Soubor nahrán na: ${fileUrl}`);
                 })
-                .then((session) => {
-                    console.log('Stripe Checkout Session vytvořena:', session.url);
-                    res.status(200).json({ url: session.url });
+            )
+                .then(() => {
+                    // Aktualizace databáze s URL nahraných souborů
+                    const updateQuery = `UPDATE orders SET files = ? WHERE id = ?`;
+                    db.run(updateQuery, [JSON.stringify(photoUrls), orderId], (err) => {
+                        if (err) {
+                            console.error('Chyba při aktualizaci objednávky v SQLite:', err.message);
+                            return res.status(500).json({ error: 'Chyba při aktualizaci objednávky.' });
+                        }
+
+                        console.log('Objednávka aktualizována s URL souborů');
+
+                        // Stripe Checkout Session
+                        let priceId;
+                        if (package === 'Základní balíček') priceId = 'price_1QgD6zKOjxPRwLQE6sc5mzB0';
+                        if (package === 'Pokročilý balíček') priceId = 'price_1QgD6zKOjxPRwLQE6sc5mzB0';
+                        if (package === 'Prémiový balíček') priceId = 'price_1QgD6zKOjxPRwLQE6sc5mzB0';
+
+                        console.log('Vytvářím Stripe Checkout Session...');
+                        stripeClient.checkout.sessions
+                            .create({
+                                payment_method_types: ['card'],
+                                customer_email: email,
+                                line_items: [{ price: priceId, quantity: 1 }],
+                                mode: 'payment',
+                                success_url: `https://your-domain.com/success?orderId=${orderId}`,
+                                cancel_url: 'https://your-domain.com/cancel',
+                            })
+                            .then((session) => {
+                                console.log('Stripe Checkout Session vytvořena:', session.url);
+                                res.status(200).json({ url: session.url });
+                            })
+                            .catch((error) => {
+                                console.error('Chyba při vytváření Stripe session:', error);
+                                res.status(500).json({ error: 'Chyba při vytváření platby.' });
+                            });
+                    });
                 })
                 .catch((error) => {
-                    console.error('Chyba při vytváření Stripe session:', error);
-                    res.status(500).json({ error: 'Chyba při vytváření platby.' });
+                    console.error('Chyba při nahrávání souborů na S3:', error);
+                    res.status(500).json({ error: 'Chyba při nahrávání souborů.' });
                 });
         });
     } catch (error) {
