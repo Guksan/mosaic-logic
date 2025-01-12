@@ -5,12 +5,14 @@ const dotenv = require('dotenv');
 const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
+const cors = require('cors'); // Importujeme CORS
 
 // Načtení konfigurace
 dotenv.config();
 
 // Inicializace aplikace
 const app = express();
+app.use(cors()); // Povolujeme CORS pro všechny původy
 const upload = multer();
 const stripeClient = stripe(process.env.STRIPE_SECRET_KEY);
 
