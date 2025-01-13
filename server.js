@@ -145,6 +145,7 @@ app.post('/api/orders/create', upload.array('photos', 15), checkFileLimit, async
             cancel_url: 'https://your-domain.com/cancel',
         });
 
+        // Vrácení URL pro otevření v novém okně
         res.status(200).json({ url: session.url });
     } catch (error) {
         console.error('Chyba při zpracování:', error);
@@ -202,7 +203,7 @@ app.post('/api/orders/free', upload.single('photo'), async (req, res) => {
 
         res.status(200).json({ message: 'Fotografie byla úspěšně nahrána.', orderId });
     } catch (error) {
-        console.error('Chyba pri zpracování "Free" objednávky:', error);
+        console.error('Chyba při zpracování "Free" objednávky:', error);
         res.status(500).json({ error: 'Chyba při zpracování objednávky.' });
     }
 });
