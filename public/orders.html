@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Seznam objednávek</title>
+    <style>
+        body {
+            font-family: 'Roboto', sans-serif;
+            background-color: #f4f4f9;
+            margin: 0;
+            padding: 20px;
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            font-size: 16px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+        }
+        table th, table td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        table th {
+            background-color: #007bff;
+            color: white;
+        }
+        table tr:hover {
+            background-color: #f1f1f1;
+        }
+        .status-pending {
+            color: orange;
+            font-weight: bold;
+        }
+        .status-paid {
+            color: green;
+            font-weight: bold;
+        }
+        .status-failed {
+            color: red;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <h1>Seznam objednávek</h1>
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>E-mail</th>
+                <th>Balíček</th>
+                <th>Status platby</th>
+                <th>Datum objednávky</th>
+            </tr>
+        </thead>
+        <tbody id="ordersTableBody">
+            <tr>
+                <td colspan="5" style="text-align: center;">Načítání...</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <script>
+        const ordersTableBody = document.getElementById('ordersTableBody');
+
+        // Funkce pro načtení objednávek z API
+        function fetchOrders() {
+            fetch('https://mosaic-logic.onrender.com/api/orders')
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Chyba při načítání objednávek.');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    console.log('Načtené objednávky:', data);
+                    renderOrders(data);
+                })
+                .catch(err => {
+                    console.error('Chyba:', err);
+                    ordersTableBody.innerHTML = `
+                        <tr>
+                            <td colspan="5" style="text-align: center; color: red;">
+                                Chyba při načítání objednávek.
+                            </td>
+                        </tr>
+                    `;
+                });
+        }
+
+        // Funkce pro vykreslení objednávek do tabulky
+        function renderOrders(orders) {
+            if (orders.length === 0) {
+                ordersTableBody.innerHTML = `
+                    <tr>
+                        <td colspan="5" style="text-align: center;">Žádné objednávky nebyly nalezeny.</td>
+                    </tr>
+                `;
+                return;
+            }
+
+            ordersTableBody.innerHTML = orders
+                .map(order => {
+                    const statusClass =
+                        order.paymentStatus === 'Pending'
+                            ? 'status-pending'
+                            : order.paymentStatus === 'Paid'
+                            ? 'status-paid'
+                            : 'status-failed';
+                    
+                    return `
+                        <tr>
+                            <td>${order.id}</td>
+                            <td>${order.email}</td>
+                            <td>${order.package}</td>
+                            <td class="${statusClass}">${order.paymentStatus}</td>
+                            <td>${new Date(order.orderDate).toLocaleString()}</td>
+                        </tr>
+                    `;
+                })
+                .join('');
+        }
+
+        // Načtení objednávek při načtení stránky
+        fetchOrders();
+    </script>
+</body>
+</html>
