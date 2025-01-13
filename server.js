@@ -6,7 +6,6 @@ const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const cors = require('cors');
-const { v4: uuidv4 } = require('uuid');
 
 // Načtení konfigurace
 dotenv.config();
@@ -84,14 +83,24 @@ const checkFileLimit = (req, res, next) => {
 app.post('/api/orders/create', upload.array('photos', 15), checkFileLimit, async (req, res) => {
     const { email, package } = req.body;
     const files = req.files;
-    const photoUrls = [];
 
     try {
-        // Generování unikátního ID objednávky
-        const orderUuid = uuidv4();
-        const folderKey = `orders/${orderUuid}/`;
+        // 1. Vložení objednávky do databáze a získání jejího ID
+        const orderId = await new Promise((resolve, reject) => {
+            db.run(
+                'INSERT INTO orders (email, package, files, paymentStatus) VALUES (?, ?, ?, ?)',
+                [email, package, JSON.stringify([]), 'Awaiting Payment'],
+                function (err) {
+                    if (err) reject(err);
+                    resolve(this.lastID);
+                }
+            );
+        });
 
-        // Nahrávání souborů na S3
+        // 2. Použití orderId pro název složky v S3
+        const folderKey = `orders/${orderId}/`;
+
+        // 3. Nahrávání souborů na S3
         const uploadPromises = files.map(async (file, index) => {
             const fileKey = `${folderKey}${Date.now()}-${index}-${file.originalname}`;
             const params = {
@@ -109,21 +118,19 @@ app.post('/api/orders/create', upload.array('photos', 15), checkFileLimit, async
 
         const uploadedUrls = await Promise.all(uploadPromises);
 
-        // Uložení objednávky do databáze s URL souborů
-        const result = await new Promise((resolve, reject) => {
+        // 4. Aktualizace databáze s URL souborů
+        await new Promise((resolve, reject) => {
             db.run(
-                'INSERT INTO orders (email, package, files, paymentStatus) VALUES (?, ?, ?, ?)',
-                [email, package, JSON.stringify(uploadedUrls), 'Awaiting Payment'],
-                function (err) {
+                'UPDATE orders SET files = ? WHERE id = ?',
+                [JSON.stringify(uploadedUrls), orderId],
+                (err) => {
                     if (err) reject(err);
-                    resolve(this.lastID);
+                    resolve();
                 }
             );
         });
 
-        const orderId = result;
-
-        // Vytvoření Stripe checkout session
+        // 5. Vytvoření Stripe checkout session
         let priceId;
         if (package === 'Základní balíček') priceId = 'price_1QgD6zKOjxPRwLQE6sc5mzB0';
         if (package === 'Pokročilý balíček') priceId = 'price_1QgD6zKOjxPRwLQE6sc5mzB0';
