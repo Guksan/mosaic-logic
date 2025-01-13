@@ -202,7 +202,7 @@ app.post('/api/orders/free', upload.single('photo'), async (req, res) => {
 
         res.status(200).json({ message: 'Fotografie byla úspěšně nahrána.', orderId });
     } catch (error) {
-        console.error('Chyba při zpracování "Free" objednávky:', error);
+        console.error('Chyba pri zpracování "Free" objednávky:', error);
         res.status(500).json({ error: 'Chyba při zpracování objednávky.' });
     }
 });
