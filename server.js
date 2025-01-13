@@ -6,6 +6,7 @@ const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const cors = require('cors');
+const { v4: uuidv4 } = require('uuid');
 
 // Načtení konfigurace
 dotenv.config();
@@ -81,37 +82,39 @@ const checkFileLimit = (req, res, next) => {
 
 // Endpoint pro vytvoření objednávky
 app.post('/api/orders/create', upload.array('photos', 15), checkFileLimit, async (req, res) => {
-    console.log('------- Nová objednávka -------');
-    console.log('Balíček:', req.body.package);
-    console.log('Email:', req.body.email);
-    console.log('Počet přijatých souborů:', req.files.length);
-    console.log('Názvy souborů:', req.files.map(f => f.originalname));
-
     const { email, package } = req.body;
     const files = req.files;
     const photoUrls = [];
 
     try {
-        // Kontrola existující objednávky
-        const existingOrder = await new Promise((resolve, reject) => {
-            db.get('SELECT * FROM orders WHERE email = ? AND paymentStatus = ?', [email, 'Pending'], (err, row) => {
-                if (err) reject(err);
-                resolve(row);
-            });
+        // Generování unikátního ID objednávky
+        const orderUuid = uuidv4();
+        const folderKey = `orders/${orderUuid}/`;
+
+        // Nahrávání souborů na S3
+        const uploadPromises = files.map(async (file, index) => {
+            const fileKey = `${folderKey}${Date.now()}-${index}-${file.originalname}`;
+            const params = {
+                Bucket: process.env.AWS_BUCKET_NAME,
+                Key: fileKey,
+                Body: file.buffer,
+                ContentType: file.mimetype,
+            };
+
+            await s3.send(new PutObjectCommand(params));
+
+            const fileUrl = `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${fileKey}`;
+            return fileUrl;
         });
 
-        if (existingOrder) {
-            return res.status(400).json({ 
-                error: 'Objednávka s tímto e-mailem již existuje. Dokončete platbu před vytvořením nové objednávky.' 
-            });
-        }
+        const uploadedUrls = await Promise.all(uploadPromises);
 
-        // Vytvoření nové objednávky
+        // Uložení objednávky do databáze s URL souborů
         const result = await new Promise((resolve, reject) => {
             db.run(
                 'INSERT INTO orders (email, package, files, paymentStatus) VALUES (?, ?, ?, ?)',
-                [email, package, JSON.stringify([]), 'Awaiting Payment'],
-                function(err) {
+                [email, package, JSON.stringify(uploadedUrls), 'Awaiting Payment'],
+                function (err) {
                     if (err) reject(err);
                     resolve(this.lastID);
                 }
@@ -119,49 +122,8 @@ app.post('/api/orders/create', upload.array('photos', 15), checkFileLimit, async
         });
 
         const orderId = result;
-        console.log(`Objednávka vytvořena s ID: ${orderId}`);
 
-        // Nahrání souborů na S3
-        const folderKey = `orders/${orderId}/`;
-        const uploadPromises = files.map(async (file, index) => {
-            console.log(`[${index + 1}/${files.length}] Začínám nahrávat: ${file.originalname}`);
-            const fileKey = `${folderKey}${Date.now()}-${index}-${file.originalname}`;
-            const params = {
-                Bucket: process.env.AWS_BUCKET_NAME,
-                Key: fileKey,
-                Body: file.buffer,
-                ContentType: file.mimetype
-            };
-            
-            try {
-                const command = new PutObjectCommand(params);
-                await s3.send(command);
-                const fileUrl = `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${fileKey}`;
-                console.log(`✓ Úspěšně nahráno: ${file.originalname}`);
-                return fileUrl;
-            } catch (error) {
-                console.error(`✗ Chyba při nahrávání ${file.originalname}:`, error);
-                throw error;
-            }
-        });
-
-        const uploadedUrls = await Promise.all(uploadPromises);
-        console.log('Všechny soubory úspěšně nahrány');
-        console.log('Počet nahraných URL:', uploadedUrls.length);
-
-        // Aktualizace objednávky s URL souborů
-        await new Promise((resolve, reject) => {
-            db.run(
-                'UPDATE orders SET files = ? WHERE id = ?',
-                [JSON.stringify(uploadedUrls), orderId],
-                (err) => {
-                    if (err) reject(err);
-                    resolve();
-                }
-            );
-        });
-
-        // Vytvoření Stripe session
+        // Vytvoření Stripe checkout session
         let priceId;
         if (package === 'Základní balíček') priceId = 'price_1QgD6zKOjxPRwLQE6sc5mzB0';
         if (package === 'Pokročilý balíček') priceId = 'price_1QgD6zKOjxPRwLQE6sc5mzB0';
@@ -176,9 +138,7 @@ app.post('/api/orders/create', upload.array('photos', 15), checkFileLimit, async
             cancel_url: 'https://your-domain.com/cancel',
         });
 
-        console.log('Stripe session vytvořena:', session.url);
         res.status(200).json({ url: session.url });
-
     } catch (error) {
         console.error('Chyba při zpracování:', error);
         res.status(500).json({ error: 'Chyba při zpracování objednávky.' });
