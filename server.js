@@ -62,6 +62,12 @@ app.post('/api/orders/create', upload.array('photos'), async (req, res) => {
 
     const { email, package } = req.body;
     const files = req.files;
+
+    if (!files || files.length === 0) {
+        console.error('Nebyl poskytnut žádný soubor.');
+        return res.status(400).json({ error: 'Musíte nahrát alespoň jeden soubor.' });
+    }
+
     const photoUrls = [];
 
     try {
@@ -98,19 +104,23 @@ app.post('/api/orders/create', upload.array('photos'), async (req, res) => {
 
                 // Nahrajte fotografie na S3
                 Promise.all(
-                    files.map(async (file) => {
-                        console.log(`Nahrávám soubor: ${file.originalname}`);
-                        const fileKey = `${folderKey}${Date.now()}-${file.originalname}`;
-                        const params = {
-                            Bucket: process.env.AWS_BUCKET_NAME,
-                            Key: fileKey,
-                            Body: file.buffer,
-                        };
-                        const command = new PutObjectCommand(params);
-                        await s3.send(command);
-                        const fileUrl = `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${fileKey}`;
-                        photoUrls.push(fileUrl);
-                        console.log(`Soubor nahrán na: ${fileUrl}`);
+                    files.map(async (file, index) => {
+                        try {
+                            console.log(`Nahrávám soubor: ${file.originalname}`);
+                            const fileKey = `${folderKey}${Date.now()}-${index}-${file.originalname}`;
+                            const params = {
+                                Bucket: process.env.AWS_BUCKET_NAME,
+                                Key: fileKey,
+                                Body: file.buffer,
+                            };
+                            const command = new PutObjectCommand(params);
+                            await s3.send(command);
+                            const fileUrl = `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${fileKey}`;
+                            photoUrls.push(fileUrl);
+                            console.log(`Soubor nahrán na: ${fileUrl}`);
+                        } catch (uploadError) {
+                            console.error(`Chyba při nahrávání souboru ${file.originalname}:`, uploadError);
+                        }
                     })
                 )
                     .then(() => {
