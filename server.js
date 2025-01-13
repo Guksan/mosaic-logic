@@ -152,6 +152,61 @@ app.post('/api/orders/create', upload.array('photos', 15), checkFileLimit, async
     }
 });
 
+// Endpoint pro "Free" objednávky
+app.post('/api/orders/free', upload.single('photo'), async (req, res) => {
+    const { email } = req.body;
+    const file = req.file;
+
+    try {
+        if (!file) {
+            return res.status(400).json({ error: 'Prosím nahrajte jednu fotografii.' });
+        }
+
+        // Vložení "Free" objednávky do databáze
+        const orderId = await new Promise((resolve, reject) => {
+            db.run(
+                'INSERT INTO orders (email, package, files, paymentStatus) VALUES (?, ?, ?, ?)',
+                [email, 'Free', JSON.stringify([]), 'Completed'],
+                function (err) {
+                    if (err) reject(err);
+                    resolve(this.lastID);
+                }
+            );
+        });
+
+        // Nahrání souboru na S3
+        const folderKey = `orders/${orderId}/`;
+        const fileKey = `${folderKey}${Date.now()}-${file.originalname}`;
+        const params = {
+            Bucket: process.env.AWS_BUCKET_NAME,
+            Key: fileKey,
+            Body: file.buffer,
+            ContentType: file.mimetype,
+        };
+
+        await s3.send(new PutObjectCommand(params));
+
+        const fileUrl = `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${fileKey}`;
+
+        // Aktualizace databáze s URL fotografie
+        await new Promise((resolve, reject) => {
+            db.run(
+                'UPDATE orders SET files = ? WHERE id = ?',
+                [JSON.stringify([fileUrl]), orderId],
+                (err) => {
+                    if (err) reject(err);
+                    resolve();
+                }
+            );
+        });
+
+        res.status(200).json({ message: 'Fotografie byla úspěšně nahrána.', orderId });
+    } catch (error) {
+        console.error('Chyba při zpracování "Free" objednávky:', error);
+        res.status(500).json({ error: 'Chyba při zpracování objednávky.' });
+    }
+});
+
 // Endpoint pro seznam objednávek
 app.get('/api/orders', (req, res) => {
     db.all('SELECT * FROM orders ORDER BY orderDate DESC', [], (err, rows) => {
