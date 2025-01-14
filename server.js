@@ -3,7 +3,7 @@ const multer = require('multer');
 const stripe = require('stripe');
 const dotenv = require('dotenv');
 const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
-const sqlite3 = require('sqlite3').verbose();
+const { Pool } = require('pg');  // Změna zde - používáme pg místo sqlite3
 const path = require('path');
 const cors = require('cors');
 
@@ -29,28 +29,30 @@ const s3 = new S3Client({
     },
 });
 
-// Inicializace SQLite databáze
-const dbPath = path.resolve(__dirname, 'database.db');
-const db = new sqlite3.Database(dbPath, (err) => {
-    if (err) {
-        console.error('Chyba při připojení k SQLite:', err.message);
-    } else {
-        console.log('Připojeno k SQLite databázi');
+// Inicializace PostgreSQL databáze
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: {
+        rejectUnauthorized: false
     }
 });
 
 // Vytvoření tabulky objednávek
 const createTableQuery = `
 CREATE TABLE IF NOT EXISTS orders (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     email TEXT NOT NULL,
     package TEXT NOT NULL,
     files TEXT NOT NULL,
     paymentStatus TEXT DEFAULT 'Pending',
-    orderDate TEXT DEFAULT CURRENT_TIMESTAMP
+    orderDate TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 `;
-db.run(createTableQuery);
+
+// Vytvoření tabulky při startu aplikace
+pool.query(createTableQuery)
+    .then(() => console.log('Tabulka orders existuje nebo byla vytvořena'))
+    .catch(err => console.error('Chyba při vytváření tabulky:', err));
 
 // Middleware pro kontrolu počtu souborů podle balíčku
 const checkFileLimit = (req, res, next) => {
@@ -86,16 +88,11 @@ app.post('/api/orders/create', upload.array('photos', 15), checkFileLimit, async
 
     try {
         // 1. Vložení objednávky do databáze a získání jejího ID
-        const orderId = await new Promise((resolve, reject) => {
-            db.run(
-                'INSERT INTO orders (email, package, files, paymentStatus) VALUES (?, ?, ?, ?)',
-                [email, package, JSON.stringify([]), 'Awaiting Payment'],
-                function (err) {
-                    if (err) reject(err);
-                    resolve(this.lastID);
-                }
-            );
-        });
+        const result = await pool.query(
+            'INSERT INTO orders (email, package, files, paymentStatus) VALUES ($1, $2, $3, $4) RETURNING id',
+            [email, package, JSON.stringify([]), 'Awaiting Payment']
+        );
+        const orderId = result.rows[0].id;
 
         // 2. Použití orderId pro název složky v S3
         const folderKey = `orders/${orderId}/`;
@@ -119,16 +116,10 @@ app.post('/api/orders/create', upload.array('photos', 15), checkFileLimit, async
         const uploadedUrls = await Promise.all(uploadPromises);
 
         // 4. Aktualizace databáze s URL souborů
-        await new Promise((resolve, reject) => {
-            db.run(
-                'UPDATE orders SET files = ? WHERE id = ?',
-                [JSON.stringify(uploadedUrls), orderId],
-                (err) => {
-                    if (err) reject(err);
-                    resolve();
-                }
-            );
-        });
+        await pool.query(
+            'UPDATE orders SET files = $1 WHERE id = $2',
+            [JSON.stringify(uploadedUrls), orderId]
+        );
 
         // 5. Vytvoření Stripe checkout session
         let priceId;
@@ -164,16 +155,11 @@ app.post('/api/orders/free', upload.single('photo'), async (req, res) => {
         }
 
         // Vložení "Free" objednávky do databáze
-        const orderId = await new Promise((resolve, reject) => {
-            db.run(
-                'INSERT INTO orders (email, package, files, paymentStatus) VALUES (?, ?, ?, ?)',
-                [email, 'Free', JSON.stringify([]), 'Completed'],
-                function (err) {
-                    if (err) reject(err);
-                    resolve(this.lastID);
-                }
-            );
-        });
+        const result = await pool.query(
+            'INSERT INTO orders (email, package, files, paymentStatus) VALUES ($1, $2, $3, $4) RETURNING id',
+            [email, 'Free', JSON.stringify([]), 'Completed']
+        );
+        const orderId = result.rows[0].id;
 
         // Nahrání souboru na S3
         const folderKey = `orders/${orderId}/`;
@@ -190,16 +176,10 @@ app.post('/api/orders/free', upload.single('photo'), async (req, res) => {
         const fileUrl = `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${fileKey}`;
 
         // Aktualizace databáze s URL fotografie
-        await new Promise((resolve, reject) => {
-            db.run(
-                'UPDATE orders SET files = ? WHERE id = ?',
-                [JSON.stringify([fileUrl]), orderId],
-                (err) => {
-                    if (err) reject(err);
-                    resolve();
-                }
-            );
-        });
+        await pool.query(
+            'UPDATE orders SET files = $1 WHERE id = $2',
+            [JSON.stringify([fileUrl]), orderId]
+        );
 
         res.status(200).json({ message: 'Fotografie byla úspěšně nahrána.', orderId });
     } catch (error) {
@@ -209,14 +189,14 @@ app.post('/api/orders/free', upload.single('photo'), async (req, res) => {
 });
 
 // Endpoint pro seznam objednávek
-app.get('/api/orders', (req, res) => {
-    db.all('SELECT * FROM orders ORDER BY orderDate DESC', [], (err, rows) => {
-        if (err) {
-            console.error('Chyba při načítání objednávek:', err.message);
-            return res.status(500).json({ error: 'Chyba při načítání objednávek.' });
-        }
-        res.json(rows);
-    });
+app.get('/api/orders', async (req, res) => {
+    try {
+        const result = await pool.query('SELECT * FROM orders ORDER BY orderDate DESC');
+        res.json(result.rows);
+    } catch (error) {
+        console.error('Chyba při načítání objednávek:', error);
+        res.status(500).json({ error: 'Chyba při načítání objednávek.' });
+    }
 });
 
 // Spuštění serveru
