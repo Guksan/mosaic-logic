@@ -159,7 +159,7 @@ app.post('/api/orders/create', upload.array('photos', 15), checkFileLimit, async
 
         // 5. Vytvoření Stripe checkout session
         let priceId;
-        if (package === 'Základní balíček') priceId = 'price_1QiwuGKOjxPRwLQELNpvrr0s';
+        if (package === 'Základní balíček') priceId = 'price_1QgD6zKOjxPRwLQE6sc5mzB0';
         if (package === 'Pokročilý balíček') priceId = 'price_1QifO4KOjxPRwLQE2p03qG9Y';
         if (package === 'Prémiový balíček') priceId = 'price_1QifRaKOjxPRwLQEcDu1wjsX';
 
@@ -168,7 +168,7 @@ app.post('/api/orders/create', upload.array('photos', 15), checkFileLimit, async
             customer_email: email,
             line_items: [{ price: priceId, quantity: 1 }],
             mode: 'payment',
-            success_url: 'https://mosaicprovisuals.com?success=true',
+            success_url: 'https://www.mosaicprovisuals.com/success',
             cancel_url: 'https://mosaicprovisuals.com',
             locale: 'cs',
             metadata: {
