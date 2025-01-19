@@ -173,14 +173,6 @@ app.post('/api/orders/create', upload.array('photos', 15), checkFileLimit, async
             locale: 'cs',
             metadata: {
                 orderId: orderId
-            },
-            custom_text: {
-                submit: {
-                    message: 'Vaše objednávka bude zpracována po přijetí platby.'
-                },
-                success: {
-                    message: 'Děkujeme za vaši objednávku! Fotografie jsme přijali ke zpracování a výsledek vám zašleme emailem.'
-                }
             }
         });
 
