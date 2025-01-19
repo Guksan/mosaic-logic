@@ -3,7 +3,7 @@ const multer = require('multer');
 const stripe = require('stripe');
 const dotenv = require('dotenv');
 const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
-const { Pool } = require('pg');  // Změna zde - používáme pg místo sqlite3
+const { Pool } = require('pg');
 const path = require('path');
 const cors = require('cors');
 
@@ -13,6 +13,10 @@ dotenv.config();
 // Inicializace aplikace
 const app = express();
 app.use(cors());
+
+// Parsování raw body pro Stripe webhook
+app.use('/webhook', express.raw({type: 'application/json'}));
+
 const upload = multer({
     limits: {
         fileSize: 5 * 1024 * 1024 // 5MB limit na soubor
@@ -53,6 +57,38 @@ CREATE TABLE IF NOT EXISTS orders (
 pool.query(createTableQuery)
     .then(() => console.log('Tabulka orders existuje nebo byla vytvořena'))
     .catch(err => console.error('Chyba při vytváření tabulky:', err));
+
+// Webhook endpoint pro Stripe
+app.post('/webhook', async (req, res) => {
+    const sig = req.headers['stripe-signature'];
+    let event;
+
+    try {
+        event = stripeClient.webhooks.constructEvent(
+            req.body,
+            sig,
+            process.env.STRIPE_WEBHOOK_SECRET
+        );
+    } catch (err) {
+        console.error('Webhook Error:', err.message);
+        return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+
+    if (event.type === 'checkout.session.completed') {
+        const session = event.data.object;
+        try {
+            await pool.query(
+                'UPDATE orders SET paymentStatus = $1 WHERE id = $2',
+                ['Completed', session.metadata.orderId]
+            );
+            console.log(`✓ Platba dokončena pro objednávku ${session.metadata.orderId}`);
+        } catch (error) {
+            console.error('Chyba při aktualizaci statusu:', error);
+        }
+    }
+
+    res.json({received: true});
+});
 
 // Middleware pro kontrolu počtu souborů podle balíčku
 const checkFileLimit = (req, res, next) => {
@@ -132,8 +168,20 @@ app.post('/api/orders/create', upload.array('photos', 15), checkFileLimit, async
             customer_email: email,
             line_items: [{ price: priceId, quantity: 1 }],
             mode: 'payment',
-            success_url: `https://your-domain.com/success?orderId=${orderId}`,
-            cancel_url: 'https://your-domain.com/cancel',
+            success_url: 'https://mosaicprovisuals.com?success=true',
+            cancel_url: 'https://mosaicprovisuals.com',
+            locale: 'cs',
+            metadata: {
+                orderId: orderId
+            },
+            custom_text: {
+                submit: {
+                    message: 'Vaše objednávka bude zpracována po přijetí platby.'
+                },
+                success: {
+                    message: 'Děkujeme za vaši objednávku! Fotografie jsme přijali ke zpracování a výsledek vám zašleme emailem.'
+                }
+            }
         });
 
         // Vrácení URL pro otevření v novém okně
