@@ -159,9 +159,9 @@ app.post('/api/orders/create', upload.array('photos', 15), checkFileLimit, async
 
         // 5. Vytvoření Stripe checkout session
         let priceId;
-        if (package === 'Základní balíček') priceId = 'price_1QgD6zKOjxPRwLQE6sc5mzB0';
-        if (package === 'Pokročilý balíček') priceId = 'price_1QifO4KOjxPRwLQE2p03qG9Y';
-        if (package === 'Prémiový balíček') priceId = 'price_1QifRaKOjxPRwLQEcDu1wjsX';
+        if (package === 'Basic package') priceId = 'price_1QqJpLKOjxPRwLQEPJuSgOu1';
+        if (package === 'Advanced package') priceId = 'price_1QqJqpKOjxPRwLQEyTsmkkat';
+        if (package === 'Premium package') priceId = 'price_1QqJrmKOjxPRwLQE7TiaszDO';
 
         const session = await stripeClient.checkout.sessions.create({
             payment_method_types: ['card'],
